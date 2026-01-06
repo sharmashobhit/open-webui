@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator, List, Optional, Sequence, Union
 
+import requests
+
 from fastapi import (
     Depends,
     FastAPI,
@@ -1495,7 +1497,6 @@ def process_file(
 
     if file:
         try:
-
             collection_name = form_data.collection_name
 
             if collection_name is None:
@@ -1646,6 +1647,37 @@ def process_file(
                     "content": text_content,
                 }
             else:
+                # Custom code for NEO4J graph ingestion
+                # Push to neo4j database.
+                if os.environ.get("NEO4J_GRAPH_INGEST"):
+                    try:
+                        SHAKUDO_GRAPH_TOOL_MICROSERVICE = os.getenv(
+                            "SHAKUDO_NEO4J_GRAPH_TOOL_MICROSERVICE"
+                        )
+                        if not SHAKUDO_GRAPH_TOOL_MICROSERVICE:
+                            raise ValueError(
+                                "SHAKUDO_NEO4J_GRAPH_TOOL_MICROSERVICE environment variable is not set"
+                            )
+                        payload = {
+                            "file_name": file.filename,
+                            "file_hash": hash if hash else "",
+                            "content": str(text_content),
+                            "chat_id": "123",  # TODO: Need to propagate chat_id from the webui instance to here in retrieval mode
+                        }
+                        response = requests.post(
+                            SHAKUDO_GRAPH_TOOL_MICROSERVICE, json=payload
+                        )
+                        response.raise_for_status()  # This will raise an exception for HTTP errors
+                        log.info("Successfully ingested file to neo4j.")
+                    except requests.RequestException as e:
+                        log.error(f"Error ingesting file to neo4j: {str(e)}")
+                    except ValueError as e:
+                        log.error(str(e))
+                    except Exception as e:
+                        log.error(f"Unexpected error during neo4j ingestion: {str(e)}")
+                else:
+                    log.info("Neo4J Ingestion not configured")
+
                 try:
                     result = save_docs_to_vector_db(
                         request,
@@ -2106,7 +2138,6 @@ def search_web(
 async def process_web_search(
     request: Request, form_data: SearchForm, user=Depends(get_verified_user)
 ):
-
     urls = []
     result_items = []
 
@@ -2286,7 +2317,8 @@ async def query_doc_handler(
                 collection_name=form_data.collection_name,
                 collection_result=collection_results[form_data.collection_name],
                 query=form_data.query,
-                embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                embedding_function=lambda query,
+                prefix: request.app.state.EMBEDDING_FUNCTION(
                     query, prefix=prefix, user=user
                 ),
                 k=form_data.k if form_data.k else request.app.state.config.TOP_K,
@@ -2355,7 +2387,8 @@ async def query_collection_handler(
             return await query_collection_with_hybrid_search(
                 collection_names=form_data.collection_names,
                 queries=[form_data.query],
-                embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                embedding_function=lambda query,
+                prefix: request.app.state.EMBEDDING_FUNCTION(
                     query, prefix=prefix, user=user
                 ),
                 k=form_data.k if form_data.k else request.app.state.config.TOP_K,
@@ -2390,7 +2423,8 @@ async def query_collection_handler(
             return await query_collection(
                 collection_names=form_data.collection_names,
                 queries=[form_data.query],
-                embedding_function=lambda query, prefix: request.app.state.EMBEDDING_FUNCTION(
+                embedding_function=lambda query,
+                prefix: request.app.state.EMBEDDING_FUNCTION(
                     query, prefix=prefix, user=user
                 ),
                 k=form_data.k if form_data.k else request.app.state.config.TOP_K,
